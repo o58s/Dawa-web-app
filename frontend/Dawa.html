@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dawa · Drug Repurposing Platform</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="styles.css" />
+
+  <template id="__bundler_thumbnail">
+    <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+      <rect width="120" height="120" fill="#FAF7F4"/>
+      <g transform="translate(60 60)">
+        <circle r="26" fill="none" stroke="#c0263a" stroke-width="2"/>
+        <circle cx="-22" cy="-10" r="6" fill="#c0263a"/>
+        <circle cx="22" cy="-10" r="6" fill="#1A1614"/>
+        <circle cx="0" cy="22" r="6" fill="#c0263a"/>
+        <line x1="-22" y1="-10" x2="22" y2="-10" stroke="#1A1614" stroke-width="1.5"/>
+        <line x1="-22" y1="-10" x2="0" y2="22" stroke="#c0263a" stroke-width="1.5"/>
+        <line x1="22" y1="-10" x2="0" y2="22" stroke="#1A1614" stroke-width="1.5"/>
+      </g>
+    </svg>
+  </template>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" src="components/MolecularBg.jsx"></script>
+  <script type="text/babel" src="components/Hero.jsx"></script>
+  <script type="text/babel" src="components/Results.jsx"></script>
+  <script type="text/babel" src="components/TweaksPanel.jsx"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // ===== Backend config =====
+    // Change this if you deploy the backend somewhere else.
+    const API_BASE = 'http://localhost:5000';
+    const TOP_K = 20;
+
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "accent": "#c0263a",
+      "density": 60,
+      "headline": "serif",
+      "mode": "paper"
+    }/*EDITMODE-END*/;
+
+    function Logo() {
+      return (
+        <div className="logo">
+          <div className="logo-mark" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+              <circle cx="7" cy="7" r="2.5"/>
+              <circle cx="17" cy="7" r="2.5"/>
+              <circle cx="12" cy="17" r="2.5"/>
+              <path d="M9 8l6 0M8.5 9l2.5 6M15.5 9l-2.5 6"/>
+            </svg>
+          </div>
+          <div className="logo-text">
+            <div className="logo-name">Dawa</div>
+            <div className="logo-tag">Drug Repurposing</div>
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      const [tweaks, setTweaks] = useState(TWEAK_DEFAULTS);
+      const [editMode, setEditMode] = useState(false);
+
+      // Real backend state
+      const [query, setQuery] = useState(null);     // the drug name we ran
+      const [results, setResults] = useState(null); // { drug, predictions: [...] }
+      const [searching, setSearching] = useState(false);
+      const [errorMsg, setErrorMsg] = useState(null);
+
+      // expose accent + mode to CSS
+      useEffect(() => {
+        document.documentElement.style.setProperty('--accent', tweaks.accent);
+        const [r, g, b] = hexToRgb(tweaks.accent);
+        document.documentElement.style.setProperty('--accent-soft', `rgba(${r},${g},${b},0.08)`);
+        document.documentElement.style.setProperty('--accent-mid', `rgba(${r},${g},${b},0.35)`);
+        document.documentElement.setAttribute('data-mode', tweaks.mode);
+        document.documentElement.setAttribute('data-headline', tweaks.headline);
+      }, [tweaks]);
+
+      // Edit-mode protocol
+      useEffect(() => {
+        const onMsg = (e) => {
+          if (!e.data) return;
+          if (e.data.type === '__activate_edit_mode') setEditMode(true);
+          if (e.data.type === '__deactivate_edit_mode') setEditMode(false);
+        };
+        window.addEventListener('message', onMsg);
+        window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+        return () => window.removeEventListener('message', onMsg);
+      }, []);
+
+      const updateTweaks = (next) => {
+        setTweaks(next);
+        window.parent.postMessage({ type: '__edit_mode_set_keys', edits: next }, '*');
+      };
+
+      // ===== The actual backend call =====
+      const handleSearch = async (q) => {
+        setSearching(true);
+        setErrorMsg(null);
+        setResults(null);
+        setQuery(q);
+
+        try {
+          const res = await fetch(`${API_BASE}/predict`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ drug_name: q, top_k: TOP_K }),
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) {
+            // Backend returned 4xx/5xx with an "error" field
+            setErrorMsg(data.error || `Request failed (${res.status})`);
+            setSearching(false);
+            return;
+          }
+
+          setResults(data);
+        } catch (err) {
+          setErrorMsg(
+            `Could not reach backend at ${API_BASE}. ` +
+            `Make sure Flask is running (python app.py) and CORS is enabled.`
+          );
+        } finally {
+          setSearching(false);
+        }
+      };
+
+      const hasResults = !!results || !!errorMsg;
+
+      return (
+        <div className="app">
+          <div className="bg-layer">
+            <MolecularBg density={tweaks.density} accent={tweaks.accent} />
+          </div>
+
+          <div className="content">
+            <nav className="nav">
+              <Logo />
+              <div className="nav-right">
+                <a href="#">Database</a>
+                <a href="#">Pathways</a>
+                <a href="#">Docs</a>
+                <a href="#">API</a>
+                <a href="#" className="nav-cta">Sign in</a>
+              </div>
+            </nav>
+
+            <Hero onSearch={handleSearch} searching={searching} hasResults={hasResults} />
+
+            {errorMsg && (
+              <div className="error-card">
+                <div className="error-title">Something went wrong</div>
+                <div className="error-msg">{errorMsg}</div>
+              </div>
+            )}
+
+            {results && !errorMsg && (
+              <Results query={results.drug} predictions={results.predictions} />
+            )}
+          </div>
+
+          {editMode && <TweaksPanel state={tweaks} setState={updateTweaks} />}
+        </div>
+      );
+    }
+
+    function hexToRgb(hex) {
+      const m = hex.replace('#','').match(/.{2}/g);
+      return m ? m.map(h => parseInt(h, 16)) : [0,0,0];
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
